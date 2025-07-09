@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dino Runner - Super Enhanced</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <style>
+    html, body { background: #e6f1f7; margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden;}
+    body { display: flex; flex-direction: column; align-items: center;}
+    canvas { display: block; background: #f7f7f7; border: 2px solid #333; margin: 0 auto; box-shadow: 0 6px 24px #0003;}
+    #scoreDisplay {
+      position: absolute; top: 2vw; left: 0; width: 100vw;
+      text-align: center; font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 2em; color: #127ba3; text-shadow: 0 1px 3px #fff, 0 2px 12px #3332;
+      pointer-events: none; user-select: none;
+    }
+    #overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(255,255,255,0.92);
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      z-index: 10; transition: background .2s; pointer-events: none; user-select: none;
+    }
+    #overlay.visible { pointer-events: auto; user-select: auto;}
+    #overlay h1 { margin: 0 0 16px 0; font-size: 2.1em; font-family: 'Segoe UI', Arial, sans-serif; color: #333; }
+    #overlay p, #overlay button {
+      font-family: 'Segoe UI', Arial, sans-serif; color: #333; font-size: 1.2em; margin: 7px 0;
+    }
+    #overlay button {
+      padding: 13px 32px; background: #0c7fd7; color: #fff; border: none; border-radius: 7px;
+      font-size: 1.1em; letter-spacing: 1px; cursor: pointer; margin-top: 24px;
+      box-shadow: 0 2px 6px #0001; transition: background .2s;
+    }
+    #overlay button:hover { background: #095a98;}
+    #charSelect { display: flex; flex-direction: row; justify-content: center; margin: 18px;}
+    .charBtn {
+      width: 60px; height: 60px; border: 2px solid #aaa; border-radius: 50%; margin: 0 14px; background: #eee;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .charBtn.selected { border: 3px solid #0c7fd7;}
+    #muteBtn {
+      position: absolute; top: 12px; right: 24px; z-index: 20;
+      background: #fff; border: 1.5px solid #127ba3; border-radius: 50%; width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      font-size: 22px; color: #127ba3; box-shadow: 0 2px 6px #0001;
+      transition: background .2s, color .2s;
+    }
+    #muteBtn.muted { color: #aaa; background: #e7e7e7;}
+    @media (max-width: 600px) {
+      #scoreDisplay { font-size: 1.1em;}
+      #overlay h1 { font-size: 1.2em;}
+      #overlay p { font-size: .95em;}
+      #overlay button { font-size: .95em; padding: 9px 18px;}
+      #muteBtn { width: 34px; height: 34px; font-size: 16px;}
+      .charBtn { width: 40px; height: 40px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="scoreDisplay"></div>
+  <div id="overlay"></div>
+  <div id="muteBtn" title="Mute/unmute sounds">&#128266;</div>
+  <audio id="jumpSound" src="https://cdn.pixabay.com/audio/2022/03/15/audio_115b9f6f3f.mp3"></audio>
+  <audio id="scoreSound" src="https://cdn.pixabay.com/audio/2022/07/26/audio_124bfa9972.mp3"></audio>
+  <audio id="gameOverSound" src="https://cdn.pixabay.com/audio/2022/10/16/audio_12d7c8b0f4.mp3"></audio>
+  <audio id="powerupSound" src="https://cdn.pixabay.com/audio/2023/02/24/audio_126f75d446.mp3"></audio>
+  <audio id="music" src="https://cdn.pixabay.com/audio/2022/10/16/audio_12d5e6f4f3.mp3" loop></audio>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 900, H = 300, scale = 1;
+function resize() {
+  const maxW = Math.min(window.innerWidth - 10, 900);
+  scale = maxW / W;
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = (W * scale) + "px";
+  canvas.style.height = (H * scale) + "px";
+}
+resize(); window.addEventListener('resize', resize);
+
+/* Game Variables and Assets */
+const dinoColors = [
+  { name: "Gray", body: "#222", shade: "#444", tail: "#1a1a1a", accent: "#fff" },
+  { name: "Green", body: "#1B5E20", shade: "#388E3C", tail: "#145813", accent: "#fff" },
+  { name: "Pink", body: "#D81B60", shade: "#AD1457", tail: "#A3154F", accent: "#fff" }
+];
+let selectedChar = 0;
+const overlay = document.getElementById("overlay");
+const scoreDisplay = document.getElementById("scoreDisplay");
+const S_jump = document.getElementById("jumpSound");
+const S_score = document.getElementById("scoreSound");
+const S_gameOver = document.getElementById("gameOverSound");
+const S_powerup = document.getElementById("powerupSound");
+const music = document.getElementById("music");
+const muteBtn = document.getElementById("muteBtn");
+
+let dino, obstacles, birds, clouds, score, highScore, gameOver, running, paused, groundSpeed;
+let nextBlink, blinkState, milestoneFlash, milestoneTimer, jumpQueued, night, modeTimer, showCountdown, countdownVal;
+let invincible, invincTimer, powerups, musicOn, soundOn;
+
+/* Utility */
+function rnd(a, b) { return a + Math.random() * (b-a); }
+function rectsCollide(a, b) {
+  return a.x < b.x+b.width && a.x+a.width > b.x &&
+         a.y < b.y+b.height && a.y+a.height > b.y;
+}
+function showOverlay(html) { overlay.innerHTML = html; overlay.classList.add('visible'); }
+function hideOverlay() { overlay.classList.remove('visible'); }
+function showScore() {
+  scoreDisplay.textContent = `Score: ${score}   ${highScore ? " | High: "+highScore : ""}${invincible ? " | INVINCIBLE!" : ""}`;
+}
+function playSound(audio) { if(soundOn){ audio.currentTime=0; audio.play();} }
+function startMusic() { if(musicOn) { music.volume = 0.4; music.play(); } }
+function stopMusic() { music.pause(); music.currentTime = 0; }
+
+/* Drawing */
+function drawDino(inv=false) {
+  const color = dinoColors[selectedChar];
+  ctx.save();
+  ctx.translate(dino.x, dino.y);
+  ctx.globalAlpha = inv ? 0.7 + 0.3*Math.sin(Date.now()/80) : 1;
+  // Glow if invincible
+  if(inv) {
+    ctx.shadowColor = color.accent; ctx.shadowBlur = 18;
+  }
+  // Body
+  ctx.fillStyle = color.body;
+  ctx.beginPath();
+  ctx.moveTo(8,40); ctx.lineTo(8,16); ctx.lineTo(43,8);
+  ctx.quadraticCurveTo(47,12,44,28); ctx.lineTo(44,40); ctx.closePath(); ctx.fill();
+  // Head
+  ctx.beginPath(); ctx.ellipse(32, 10, 13, 10, 0, 0, 2*Math.PI); ctx.fill();
+  // Tail
+  ctx.save(); ctx.translate(5,40); ctx.rotate(dino.jumping ? -0.2 : 0.19);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-18,4); ctx.lineTo(-2,-4); ctx.closePath();
+  ctx.fillStyle = color.tail; ctx.fill(); ctx.restore();
+  // Legs (animated)
+  ctx.save();
+  let legSwing = dino.leg, t = dino.jumping ? 0 : 1.2*Math.sin(legSwing/5);
+  ctx.fillStyle = color.shade;
+  ctx.fillRect(15, 38, 7, 11 + (t>0?3:0));
+  ctx.fillRect(29, 38, 7, 11 + (t<0?3:0));
+  ctx.restore();
+  // Eye (blinking)
+  ctx.save();
+  ctx.fillStyle = color.accent;
+  ctx.beginPath(); ctx.ellipse(38, 13, 3.2, blinkState ? 2 : 3.2, 0, 0, 2*Math.PI); ctx.fill();
+  ctx.fillStyle = "#111";
+  ctx.beginPath(); ctx.arc(39, 13, 1.1, 0, 2*Math.PI); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+  ctx.shadowBlur = 0;
+}
+
+function drawBird(bird) {
+  ctx.save();
+  ctx.translate(bird.x, bird.y);
+  ctx.scale(bird.flapUp ? 1 : 1, 1);
+  ctx.fillStyle = "#555";
+  ctx.beginPath();
+  ctx.ellipse(0, 10, 18, 9, 0, 0, 2*Math.PI); ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(18, 14, 8, 7, 0, 0, 2*Math.PI); ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(21, 16, 2.3, 0, 2*Math.PI); ctx.fill();
+  ctx.fillStyle = "#222";
+  ctx.beginPath();
+  ctx.arc(22, 16, 1, 0, 2*Math.PI); ctx.fill();
+  // Wings
+  ctx.save();
+  ctx.rotate(Math.PI/16 * (bird.flapUp?1:-1));
+  ctx.fillStyle = "#777";
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 13, 4+6*Math.abs(Math.sin(Date.now()/150+bird.x)), 0, 0, 2*Math.PI); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawObstacles() {
+  obstacles.forEach(obs => {
+    ctx.save();
+    ctx.translate(obs.x, obs.y);
+    ctx.fillStyle = "#168c36";
+    ctx.fillRect(0, 0, obs.width, obs.height);
+    ctx.fillRect(-5, obs.height-30, 10, 16);
+    ctx.fillRect(obs.width-5, obs.height-25, 10, 12);
+    ctx.restore();
+  });
+  birds.forEach(drawBird);
+}
+
+function drawClouds() {
+  clouds.forEach(cld => {
+    ctx.save();
+    ctx.globalAlpha = 0.21 + 0.09 * Math.sin(cld.x/53);
+    ctx.fillStyle = "#cbe8fa";
+    ctx.beginPath();
+    ctx.ellipse(cld.x, cld.y, cld.r, cld.r*0.6, 0, 0, 2*Math.PI);
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawGround() {
+  ctx.save();
+  ctx.strokeStyle = night ? "#ddd" : "#444";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, H - 12);
+  ctx.lineTo(W, H - 12);
+  ctx.stroke();
+  ctx.setLineDash([16, 12]);
+  ctx.strokeStyle = night ? "#fff3" : "#bdbdbd";
+  ctx.lineWidth = 4; ctx.globalAlpha = .7;
+  ctx.beginPath();
+  ctx.moveTo(-score%28, H-6);
+  ctx.lineTo(W, H-6);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawPowerups() {
+  for (let star of powerups) {
+    ctx.save();
+    ctx.translate(star.x, star.y);
+    ctx.scale(1.2+0.2*Math.sin(Date.now()/80),1.2+0.2*Math.cos(Date.now()/90));
+    ctx.globalAlpha = 0.86+0.14*Math.sin(Date.now()/40);
+    ctx.rotate(Date.now()/700);
+    ctx.beginPath();
+    for (let i=0;i<5;i++) {
+      ctx.lineTo(0, 12);
+      ctx.translate(0, 12);
+      ctx.rotate((Math.PI * 2 / 5) * 2);
+    }
+    ctx.fillStyle = "#ffe066";
+    ctx.shadowColor = "#ff0"; ctx.shadowBlur = 10;
+    ctx.fill(); ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawMilestoneFlash() {
+  if (milestoneFlash) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, milestoneTimer/8);
+    ctx.fillStyle = night ? "#001e2e" : "#e7ffea";
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+  }
+}
+
+function drawNightMode() {
+  if (night) {
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = "#0d1e2d";
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+    // Moon
+    ctx.save();
+    ctx.globalAlpha = .24;
+    ctx.beginPath();
+    ctx.arc(W-100, 60, 28, 0, 2*Math.PI);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.globalAlpha = .11;
+    ctx.beginPath();
+    ctx.arc(W-80, 70, 18, 0, 2*Math.PI);
+    ctx.fill();
+    ctx.restore();
+    ctx.restore();
+  }
+}
+
+function drawCountdown() {
+  if(showCountdown && countdownVal) {
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = night ? "#001e2e" : "#fff";
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#333";
+    ctx.font = "bold 80px Segoe UI, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(countdownVal, W/2, H/2+28);
+    ctx.restore();
+  }
+}
+
+/* Game State Logic */
+function resetGame() {
+  dino = { x:90, y:H-60-48, width:48, height:48, vy:0, jumping:false, leg:0, alive:true };
+  obstacles = [];
+  birds = [];
+  clouds = [];
+  for (let i=0; i<5; ++i)
+    clouds.push({ x:rnd(70,W-40), y:rnd(25, 80), r:rnd(16, 30), dx:rnd(0.18,0.38) });
+  powerups = [];
+  score = 0;
+  groundSpeed = 7.1;
+  nextBlink = Date.now()+1000+rnd(0,1300);
+  blinkState = true;
+  milestoneFlash = false;
+  milestoneTimer = 0;
+  gameOver = false; running = false; paused = false; jumpQueued = false;
+  night = false; modeTimer = 0;
+  invincible = false; invincTimer = 0;
+  showCountdown = false; countdownVal = 0;
+  showScore();
+}
+
+function stepGame() {
+  if (paused) { drawPauseOverlay(); return; }
+  ctx.clearRect(0,0,W,H);
+  drawNightMode();
+  drawClouds();
+  drawGround();
+  drawObstacles();
+  drawPowerups();
+  drawDino(invincible);
+  drawMilestoneFlash();
+  drawCountdown();
+
+  // Clouds movement
+  for (let cld of clouds) {
+    cld.x -= cld.dx;
+    if (cld.x < -cld.r) {
+      cld.x = W + cld.r;
+      cld.y = rnd(24, 100);
+      cld.r = rnd(16, 32);
+      cld.dx = rnd(0.18,0.38);
+    }
+  }
+  // Dino physics
+  if (dino.jumping) {
+    dino.vy += 0.87;
+    dino.y += dino.vy;
+    if (dino.y >= H-60-48) {
+      dino.y = H-60-48;
+      dino.vy = 0;
+      dino.jumping = false;
+    }
+  }
+  // Dino animation
+  if (!dino.jumping) dino.leg += 1.3 + groundSpeed/6;
+  // Dino blinking
+  if (Date.now() >= nextBlink) {
+    blinkState = false;
+    setTimeout(()=>{ blinkState=true; nextBlink=Date.now()+1000+rnd(0,1700); }, 120);
+  }
+  // Obstacles: cactus
+  if (!gameOver && Math.random() < 0.019 + score/25000) {
+    let h = rnd(34, 68+score/80), w = rnd(18, 36+score/100);
+    obstacles.push({ x:W+6, y:H-60-48+h*-1, width:w, height:h });
+  }
+  // Obstacles: birds
+  if (!gameOver && Math.random() < 0.008 + score/40000 && score>200) {
+    let h = [H-60-90, H-60-60, H-60-30][Math.floor(Math.random()*3)];
+    birds.push({ x:W+6, y:h, width:40, height:28, flapUp:Math.random()<0.5 });
+  }
+  // Powerups
+  if(!gameOver && Math.random() < 0.003 + score/200000 && score>100) {
+    powerups.push({ x:W+6, y:rnd(H-60-140, H-60-40), r:15 });
+  }
+  for (let obs of obstacles) obs.x -= groundSpeed;
+  obstacles = obstacles.filter(obs => obs.x+obs.width > 0);
+  // Bird movement
+  for (let bird of birds) {
+    bird.x -= groundSpeed+2; bird.flapUp = Math.floor(Date.now()/120)%2===0;
+  }
+  birds = birds.filter(bird => bird.x+bird.width > 0);
+  // Powerup movement
+  for (let star of powerups) star.x -= groundSpeed;
+  powerups = powerups.filter(star => star.x+star.r > 0);
+
+  // Powerup collision
+  for (let star of powerups) {
+    if(rectsCollide(
+      {x:dino.x+10, y:dino.y+8, width:dino.width-16, height:dino.height-12},
+      {x:star.x-star.r, y:star.y-star.r, width:star.r*2, height:star.r*2}
+    )) {
+      powerups = powerups.filter(s=>s!==star);
+      invincible = true; invincTimer = 240;
+      playSound(S_powerup);
+    }
+  }
+  if(invincible) {
+    invincTimer--;
+    if(invincTimer<=0) invincible=false;
+  }
+
+  // Collision
+  if(!invincible) {
+    for (let obs of obstacles) {
+      if (rectsCollide(
+        {x:dino.x+10, y:dino.y+8, width:dino.width-16, height:dino.height-12}, obs)) {
+        dino.alive = false; gameOver = true; running = false;
+        playSound(S_gameOver);
+        if (score > highScore) {
+          highScore = score; localStorage.setItem('dinoHighScore',highScore);
+        }
+        setTimeout(showGameOver, 450);
+        break;
+      }
+    }
+    for (let bird of birds) {
+      if (rectsCollide(
+        {x:dino.x+10, y:dino.y+8, width:dino.width-16, height:dino.height-12}, bird)) {
+        dino.alive = false; gameOver = true; running = false;
+        playSound(S_gameOver);
+        if (score > highScore) {
+          highScore = score; localStorage.setItem('dinoHighScore',highScore);
+        }
+        setTimeout(showGameOver, 450);
+        break;
+      }
+    }
+  }
+  // Score/milestones
+  if (!gameOver) {
+    score++;
+    if (score%300==0 && score>0) {
+      groundSpeed += 0.24;
+      milestoneFlash = true; milestoneTimer = 12;
+      playSound(S_score);
+    }
+    if (milestoneFlash && --milestoneTimer <= 0) milestoneFlash=false;
+    showScore();
+    // Night mode switch
+    modeTimer++;
+    if(modeTimer > 60*60*0.5) { night = !night; modeTimer=0; }
+    requestAnimationFrame(stepGame);
+  }
+}
+
+/* Overlay/UI */
+function showStart() {
+  showOverlay(`
+    <h1>Dino Runner</h1>
+    <div id="charSelect">${dinoColors.map((c,i)=>`
+      <div class="charBtn${i===selectedChar?' selected':''}" data-char="${i}" title="${c.name}">
+        <canvas id="icon${i}"></canvas>
+      </div>`).join('')}
+    </div>
+    <p>Press <b>Space</b> / <b>↑</b> or <b>Tap</b> to Jump.<br>
+    Collect <b>stars</b> for invincibility.<br>
+    Press <b>P</b> or <b>Pause</b> to pause.<br>
+    Avoid <b>cacti</b> and <b>birds</b>.<br>
+    Survive as long as you can.</p>
+    <button id="startBtn">Start Game</button>
+  `);
+  document.getElementById("startBtn").onclick = startGame;
+  // Character selection
+  dinoColors.forEach((_,i)=>{
+    // Draw mini dino on each button
+    let cv = document.getElementById('icon'+i);
+    cv.width = 50; cv.height = 50;
+    let c2 = cv.getContext('2d');
+    c2.save(); c2.translate(2,2);
+    c2.fillStyle = dinoColors[i].body;
+    c2.fillRect(8,16,30,18);
+    c2.beginPath();
+    c2.ellipse(28, 13, 10, 7, 0, 0, 2*Math.PI); c2.fill();
+    c2.fillStyle = dinoColors[i].tail; c2.fillRect(4,28,8,7);
+    c2.restore();
+    cv.parentNode.onclick = function() {
+      selectedChar = i;
+      document.querySelectorAll('.charBtn').forEach(btn=>btn.classList.remove('selected'));
+      this.classList.add('selected');
+    }
+  });
+}
+
+function showGameOver() {
+  showOverlay(`
+    <h1>Game Over</h1>
+    <p>Score: <b>${score}</b><br>High Score: <b>${highScore||score}</b></p>
+    <button id="startBtn">Restart</button>
+  `);
+  document.getElementById("startBtn").onclick = ()=>{
+    hideOverlay(); resetGame(); startGame();
+  };
+}
+
+function drawPauseOverlay() {
+  ctx.save();
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = night ? "#001e2e" : "#fff";
+  ctx.fillRect(0,0,W,H);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#222";
+  ctx.font = "bold 44px Segoe UI, Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("Paused", W/2, H/2-20);
+  ctx.font = "24px Segoe UI, Arial";
+  ctx.fillText("Tap, click, or press P to resume", W/2, H/2+28);
+  ctx.restore();
+}
+
+function doCountdown(cb) {
+  showCountdown = true;
+  countdownVal = 3;
+  function tick() {
+    if(countdownVal>1) {
+      countdownVal--;
+      setTimeout(tick, 650);
+    } else {
+      showCountdown = false; countdownVal = 0;
+      cb();
+    }
+  }
+  setTimeout(tick, 650);
+}
+
+/* Controls */
+function jump() {
+  if (!dino.jumping && dino.alive && running) {
+    dino.vy = -13.7 - groundSpeed/5;
+    dino.jumping = true;
+    playSound(S_jump);
+  } else if (!running && !gameOver && !paused) {
+    running = true; hideOverlay(); stepGame();
+    startMusic();
+  }
+}
+function handleKey(e) {
+  if (e.repeat) return;
+  if (e.code === "Space" || e.code === "ArrowUp") {
+    e.preventDefault(); jump();
+  } else if (e.code === "KeyP" || e.code === "Pause") {
+    if (!running || gameOver) return;
+    if(paused) {
+      doCountdown(()=>{ paused=false; stepGame(); });
+    } else {
+      paused = true;
+      stopMusic();
+    }
+  }
+}
+function handlePointer(e) {
+  if (overlay.classList.contains("visible")) {
+    overlay.querySelector('button')?.click();
+    return e.preventDefault();
+  }
+  if (paused) { doCountdown(()=>{ paused=false; stepGame(); }); return e.preventDefault(); }
+  jump();
+  e.preventDefault();
+}
+canvas.addEventListener('touchstart', handlePointer, {passive:false});
+canvas.addEventListener('mousedown', handlePointer);
+document.addEventListener('keydown', handleKey);
+window.addEventListener('blur', ()=>{ if(running&&!paused){paused=true; stopMusic();} });
+
+/* Sound/Music Toggle */
+soundOn = true; musicOn = true;
+muteBtn.onclick = function() {
+  soundOn = !soundOn; musicOn = soundOn;
+  muteBtn.classList.toggle('muted', !soundOn);
+  if(!soundOn) { stopMusic(); } else if(running&&!paused) startMusic();
+  muteBtn.innerHTML = soundOn ? "&#128266;" : "&#128263;";
+}
+
+/* Game Start */
+function startGame() {
+  hideOverlay(); resetGame(); running = true;
+  startMusic();
+  stepGame();
+}
+function init() {
+  highScore = parseInt(localStorage.getItem('dinoHighScore')) || 0;
+  resetGame(); showStart();
+}
+init();
+</script>
+</body>
+</html>
